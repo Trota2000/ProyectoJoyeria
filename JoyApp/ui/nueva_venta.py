@@ -7,7 +7,6 @@ from ..pricing import precio_material, MENOR, MAYOR
 from ..printing import Printer
 
 
-
 class NuevaVenta(tk.Frame):
     def __init__(self, master, user):
         super().__init__(master)
@@ -16,30 +15,64 @@ class NuevaVenta(tk.Frame):
 
         self.modalidad = tk.StringVar(value=MENOR)
 
-        # Modalidad
+        # --- Modalidad ---
         ttk.Radiobutton(self, text="Menor", variable=self.modalidad, value=MENOR).grid(row=0, column=0, padx=6, pady=6)
         ttk.Radiobutton(self, text="Mayor", variable=self.modalidad, value=MAYOR).grid(row=0, column=1, padx=6, pady=6)
 
-        # Material
+        # --- Material con búsqueda y autocompletado ---
         tk.Label(self, text="Material").grid(row=1, column=0, sticky="e", padx=6, pady=6)
         self.materiales = listar_materiales_activos()  # [(id, nombre, ley), ...]
+        valores_materiales = [f"{m[1]} {m[2] or ''}".strip() for m in self.materiales]
+
         self.cbo_mat = ttk.Combobox(
             self,
-            values=[f"{m[1]} {m[2] or ''}".strip() for m in self.materiales],
-            state="readonly",
+            values=valores_materiales,
+            state="normal",  # Permite escribir
             width=28,
         )
         self.cbo_mat.grid(row=1, column=1, padx=6, pady=6)
 
-        # Peso
+        # --- Autocompletado dinámico ---
+        self._autocompletando = False
+
+        def filtrar_y_autocompletar(event):
+            if self._autocompletando:
+                return
+
+            texto = self.cbo_mat.get().strip().lower()
+            filtrados = [v for v in valores_materiales if texto in v.lower()] if texto else valores_materiales
+            self.cbo_mat["values"] = filtrados
+
+            if not texto:
+                return
+
+            coincidencias = [v for v in valores_materiales if v.lower().startswith(texto)]
+            if coincidencias:
+                self._autocompletando = True
+                self.cbo_mat.set(coincidencias[0])
+                self.cbo_mat.icursor(len(texto))
+                self.cbo_mat.selection_range(len(texto), tk.END)
+                self._autocompletando = False
+
+            if filtrados:
+                self.cbo_mat.event_generate("<Down>")
+
+        def seleccionar_primer_resultado(event):
+            if self.cbo_mat["values"]:
+                self.cbo_mat.set(self.cbo_mat["values"][0])
+
+        self.cbo_mat.bind("<KeyRelease>", filtrar_y_autocompletar)
+        self.cbo_mat.bind("<Return>", seleccionar_primer_resultado)
+
+        # --- Peso ---
         tk.Label(self, text="Peso (g)").grid(row=2, column=0, sticky="e", padx=6, pady=6)
         self.e_peso = tk.Entry(self)
         self.e_peso.grid(row=2, column=1, padx=6, pady=6)
 
-        # Botón agregar
+        # --- Botón agregar ---
         tk.Button(self, text="Agregar ítem", command=self.add_item).grid(row=3, column=0, columnspan=2, pady=(4, 8))
 
-        # Tabla de ítems
+        # --- Tabla de ítems ---
         self.tree = ttk.Treeview(self, columns=("desc", "subt"), show="headings", height=6)
         self.tree.heading("desc", text="Descripción")
         self.tree.heading("subt", text="Subtotal")
@@ -47,7 +80,7 @@ class NuevaVenta(tk.Frame):
         self.tree.column("subt", width=120, anchor="e")
         self.tree.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=6, pady=6)
 
-        # Pagos
+        # --- Pagos ---
         tk.Label(self, text="Pago efectivo").grid(row=5, column=0, sticky="e", padx=6, pady=2)
         self.e_ef = tk.Entry(self)
         self.e_ef.grid(row=5, column=1, padx=6, pady=2)
@@ -60,16 +93,17 @@ class NuevaVenta(tk.Frame):
         self.e_trf = tk.Entry(self)
         self.e_trf.grid(row=7, column=1, padx=6, pady=2)
 
-        # Guardar
+        # --- Guardar venta ---
         tk.Button(self, text="Guardar + Imprimir", command=self.guardar).grid(row=8, column=0, columnspan=2, pady=10)
 
-        # Estado
+        # Estado interno
         self.items = []
 
         # Expansión
         self.grid_rowconfigure(4, weight=1)
         self.grid_columnconfigure(1, weight=1)
 
+    # --- Función para agregar ítem ---
     def add_item(self):
         idx = self.cbo_mat.current()
         if idx < 0:
@@ -103,12 +137,12 @@ class NuevaVenta(tk.Frame):
         self.tree.insert("", "end", values=(desc, f"{int(subtotal):,}".replace(",", ".")))
         self.e_peso.delete(0, tk.END)
 
+    # --- Función para guardar venta ---
     def guardar(self):
         if not self.items:
             messagebox.showwarning("Atención", "Agregá al menos un ítem.")
             return
 
-        # Pagos
         pagos = []
         for metodo, entry in [("EFECTIVO", self.e_ef), ("TARJETA", self.e_tar), ("TRANSFERENCIA", self.e_trf)]:
             try:
@@ -140,7 +174,7 @@ class NuevaVenta(tk.Frame):
 
         messagebox.showinfo("OK", f"Venta #{venta_id} guardada. Ticket: ticket_{venta_id}.txt")
 
-        # Reset
+        # Reset general
         self.items.clear()
         for i in self.tree.get_children():
             self.tree.delete(i)

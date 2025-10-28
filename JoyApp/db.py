@@ -1,8 +1,9 @@
-# JoyApp/db.py
 from pathlib import Path
 import sqlite3
+import os
 
-DB_PATH = Path("data.db")
+# ✅ Ruta absoluta al archivo de base de datos dentro de JoyApp/
+DB_PATH = Path(__file__).resolve().parent / "data.db"
 
 def get_conn():
     # Siempre devolver una conexión nueva; habilitamos FK por si usás claves foráneas
@@ -27,6 +28,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nombre TEXT NOT NULL,
             ley TEXT,
+            tipo TEXT,
             precio_gramo_mayor REAL NOT NULL,
             precio_gramo_menor REAL NOT NULL,
             activo INTEGER DEFAULT 1
@@ -88,10 +90,10 @@ def init_db():
         # Usuario admin por defecto si no existe
         cur = con.execute("SELECT COUNT(*) FROM usuarios WHERE username = ?", ("admin",))
         if cur.fetchone()[0] == 0:
-            # contraseña 'admin' hasheada simple (reemplazá por bcrypt más adelante)
-            # NO usar en producción sin bcrypt
             con.execute(
                 "INSERT INTO usuarios (username, password_hash, rol, activo) VALUES (?,?,?,1)",
                 ("admin", "admin", "JEFE")
             )
         con.commit()
+
+    print(f"✅ Base de datos inicializada en: {DB_PATH}")
