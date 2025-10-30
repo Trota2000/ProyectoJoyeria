@@ -16,6 +16,7 @@ class Dashboard(tk.Frame):
 
         tk.Button(self, text="Nueva venta", command=self.open_nueva_venta).pack(fill="x", padx=12, pady=6)
         tk.Button(self, text="Gestión de Materiales", command=self.open_gestion_materiales).pack(fill="x", padx=12, pady=6)
+        tk.Button(self, text="Historial de Ventas", command=self.open_historial_ventas).pack(fill="x", padx=12, pady=6)
 
     # ---- Ventana de Nueva Venta ----
     def open_nueva_venta(self):
@@ -41,7 +42,7 @@ class Dashboard(tk.Frame):
             venta_ui.materiales = materiales_actualizados
             venta_ui.cbo_mat["values"] = [f"{m[1]} {m[2] or ''}".strip() for m in materiales_actualizados]
 
-        # Mensaje visual opcional (puedes comentarlo si no querés mostrarlo)
+        # Mensaje visual opcional
         messagebox.showinfo("Actualizado", f"Se cargaron {len(materiales_actualizados)} materiales disponibles.")
 
     # ---- Gestión de materiales ----
@@ -292,3 +293,305 @@ class Dashboard(tk.Frame):
                 messagebox.showerror("Error", f"No se pudieron cargar los materiales: {e}")
 
         cargar_materiales()
+
+    # ---- Historial de ventas (con reimpresión) ----
+    def open_historial_ventas(self):
+        import datetime as dt
+
+        ventana = tk.Toplevel(self.master)
+        ventana.title("Historial de Ventas")
+        ventana.geometry("950x600")
+        ventana.resizable(False, False)
+
+        # Ruta absoluta al mismo data.db que usás en gestión de materiales
+        db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data.db"))
+
+        # --------- FILTROS ---------
+        frame_filtros = tk.LabelFrame(ventana, text="Filtros", padx=10, pady=10)
+        frame_filtros.pack(fill="x", padx=10, pady=(10, 6))
+
+        tk.Label(frame_filtros, text="Desde (YYYY-MM-DD):").grid(row=0, column=0, sticky="w")
+        e_desde = tk.Entry(frame_filtros, width=12)
+        e_desde.grid(row=0, column=1, padx=(5, 15))
+
+        tk.Label(frame_filtros, text="Hasta (YYYY-MM-DD):").grid(row=0, column=2, sticky="w")
+        e_hasta = tk.Entry(frame_filtros, width=12)
+        e_hasta.grid(row=0, column=3, padx=(5, 15))
+
+        tk.Label(frame_filtros, text="Texto (ID, vendedor, modalidad):").grid(row=0, column=4, sticky="w")
+        e_texto = tk.Entry(frame_filtros, width=28)
+        e_texto.grid(row=0, column=5, padx=(5, 10))
+
+        lbl_total = tk.Label(frame_filtros, text="Mostrando 0 ventas | Total: 0 Gs", fg="gray")
+        lbl_total.grid(row=0, column=6, padx=10)
+
+        def normalizar_rango():
+            d1 = e_desde.get().strip()
+            d2 = e_hasta.get().strip()
+            if not d1:
+                d1 = "0001-01-01"
+            if not d2:
+                d2 = "9999-12-31"
+            # valida formato
+            try:
+                dt.datetime.strptime(d1, "%Y-%m-%d")
+            except Exception:
+                d1 = "0001-01-01"
+            try:
+                dt.datetime.strptime(d2, "%Y-%m-%d")
+            except Exception:
+                d2 = "9999-12-31"
+            return d1, d2
+
+        def buscar(event=None):
+            cargar_ventas()
+
+        tk.Button(frame_filtros, text="Buscar", command=buscar).grid(row=0, column=7, padx=6)
+        tk.Button(
+            frame_filtros, text="Limpiar",
+            command=lambda: [e_desde.delete(0, tk.END), e_hasta.delete(0, tk.END), e_texto.delete(0, tk.END), cargar_ventas()]
+        ).grid(row=0, column=8, padx=6)
+
+        e_texto.bind("<Return>", buscar)
+        e_texto.bind("<KeyRelease>", lambda ev: cargar_ventas())
+
+        # --------- LISTA DE VENTAS ---------
+        frame_ventas = tk.LabelFrame(ventana, text="Ventas", padx=10, pady=10)
+        frame_ventas.pack(fill="both", expand=True, padx=10, pady=(6, 6))
+
+        cols_v = ("id", "fecha", "vendedor", "modalidad", "total")
+        tv_ventas = ttk.Treeview(frame_ventas, columns=cols_v, show="headings", height=10)
+        tv_ventas.pack(fill="both", expand=True)
+
+        for c, t, w, a in [
+            ("id", "ID", 60, "center"),
+            ("fecha", "Fecha", 160, "center"),
+            ("vendedor", "Vendedor", 160, "w"),
+            ("modalidad", "Modalidad", 100, "center"),
+            ("total", "Total (Gs)", 120, "e"),
+        ]:
+            tv_ventas.heading(c, text=t)
+            tv_ventas.column(c, width=w, anchor=a)
+
+        # --------- ACCIONES (Reimprimir) ---------
+        frame_accion = tk.Frame(ventana)
+        frame_accion.pack(fill="x", padx=10, pady=(0, 6))
+
+        def reimprimir_ticket():
+            sel = tv_ventas.selection()
+            if not sel:
+                messagebox.showwarning("Atención", "Selecciona una venta para reimprimir.")
+                return
+
+            venta_id = tv_ventas.item(sel[0])["values"][0]
+
+            try:
+                # Encabezado y totales
+                con = sqlite3.connect(db_path)
+                cur = con.cursor()
+                cur.execute("""
+                    SELECT v.id, v.fecha, v.modalidad, v.total, COALESCE(u.username, '(sin usuario)') AS vendedor
+                    FROM ventas v
+                    LEFT JOIN usuarios u ON u.id = v.usuario_id
+                    WHERE v.id = ?
+                """, (venta_id,))
+                v = cur.fetchone()
+                if not v:
+                    con.close()
+                    messagebox.showerror("Error", f"No se encontró la venta #{venta_id}.")
+                    return
+                _vid, fecha, modalidad, total, vendedor = v
+
+                # Ítems
+                cur.execute("""
+                    SELECT descripcion, IFNULL(peso_gramos,0), IFNULL(precio_por_gramo,0),
+                           IFNULL(cantidad,1), subtotal, tipo
+                    FROM venta_items
+                    WHERE venta_id = ?
+                    ORDER BY id ASC
+                """, (venta_id,))
+                items_rows = cur.fetchall()
+
+                # Pagos
+                cur.execute("""
+                    SELECT metodo, monto FROM pagos
+                    WHERE venta_id = ?
+                    ORDER BY id ASC
+                """, (venta_id,))
+                pagos_rows = cur.fetchall()
+                con.close()
+
+                # Printer
+                try:
+                    from ..printing import Printer
+                except Exception:
+                    from printing import Printer
+
+                encabezado = {
+                    "nombre": "ESTELA JOYAS",
+                    "telefono": "000-000-000",
+                    "ticket_id": str(venta_id) + " (reimpreso)",
+                    "vendedor": vendedor,
+                    "modalidad": modalidad,
+                    "fecha": fecha,
+                }
+
+                items_print = [
+                    {"descripcion": desc or "", "detalle": None, "subtotal": float(subt or 0)}
+                    for (desc, _peso, _pgr, _cant, subt, _tipo) in items_rows
+                ]
+                pagos = [{"metodo": m, "monto": float(x or 0)} for (m, x) in pagos_rows]
+                totales = {"total": float(total or 0)}
+
+                salida = os.path.abspath(os.path.join(
+                    os.path.dirname(__file__), "..", f"ticket_{venta_id}_reimpreso.txt"
+                ))
+
+                printer = Printer(modo="archivo", ruta=salida)
+                printer.print_ticket(encabezado, items_print, pagos, totales)
+
+                messagebox.showinfo("OK", f"Ticket reimprimido en:\n{salida}")
+
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo reimprimir el ticket: {e}")
+
+        tk.Button(frame_accion, text="🖨️ Reimprimir ticket seleccionado", command=reimprimir_ticket).pack(side="left")
+
+        # --------- DETALLES (Ítems y Pagos) ---------
+        frame_detalle = tk.Frame(ventana)
+        frame_detalle.pack(fill="both", expand=False, padx=10, pady=(0, 10))
+
+        # Ítems
+        lf_items = tk.LabelFrame(frame_detalle, text="Ítems de la venta", padx=10, pady=10)
+        lf_items.pack(side="left", fill="both", expand=True, padx=(0, 5))
+
+        cols_i = ("descripcion", "peso_g", "p_gr", "cant", "subtotal", "tipo")
+        tv_items = ttk.Treeview(lf_items, columns=cols_i, show="headings", height=8)
+        tv_items.pack(fill="both", expand=True)
+
+        for c, t, w, a in [
+            ("descripcion", "Descripción", 360, "w"),
+            ("peso_g", "Peso (g)", 80, "e"),
+            ("p_gr", "Gs/gramo", 100, "e"),
+            ("cant", "Cant.", 60, "center"),
+            ("subtotal", "Subtotal", 120, "e"),
+            ("tipo", "Tipo", 80, "center"),
+        ]:
+            tv_items.heading(c, text=t)
+            tv_items.column(c, width=w, anchor=a)
+
+        # Pagos
+        lf_pagos = tk.LabelFrame(frame_detalle, text="Pagos", padx=10, pady=10)
+        lf_pagos.pack(side="left", fill="both", expand=True, padx=(5, 0))
+
+        cols_p = ("metodo", "monto")
+        tv_pagos = ttk.Treeview(lf_pagos, columns=cols_p, show="headings", height=8)
+        tv_pagos.pack(fill="both", expand=True)
+
+        tv_pagos.heading("metodo", text="Método")
+        tv_pagos.column("metodo", width=120, anchor="center")
+        tv_pagos.heading("monto", text="Monto (Gs)")
+        tv_pagos.column("monto", width=140, anchor="e")
+
+        # --------- CARGA / EVENTOS ---------
+        def cargar_ventas():
+            # limpiar tablas
+            for it in tv_ventas.get_children():
+                tv_ventas.delete(it)
+            for it in tv_items.get_children():
+                tv_items.delete(it)
+            for it in tv_pagos.get_children():
+                tv_pagos.delete(it)
+
+            d1, d2 = normalizar_rango()
+            txt = e_texto.get().strip().lower()
+            like = f"%{txt}%"
+
+            try:
+                con = sqlite3.connect(db_path)
+                cur = con.cursor()
+                if txt:
+                    cur.execute("""
+                        SELECT v.id, v.fecha, COALESCE(u.username,'(sin usuario)') AS vendedor, v.modalidad, v.total
+                        FROM ventas v
+                        LEFT JOIN usuarios u ON u.id = v.usuario_id
+                        WHERE v.fecha BETWEEN ? AND ?
+                          AND (
+                               LOWER(COALESCE(u.username,'')) LIKE ?
+                            OR LOWER(COALESCE(v.modalidad,'')) LIKE ?
+                            OR CAST(v.id AS TEXT) LIKE ?
+                          )
+                        ORDER BY v.id DESC
+                    """, (d1, d2, like, like, like))
+                else:
+                    cur.execute("""
+                        SELECT v.id, v.fecha, COALESCE(u.username,'(sin usuario)') AS vendedor, v.modalidad, v.total
+                        FROM ventas v
+                        LEFT JOIN usuarios u ON u.id = v.usuario_id
+                        WHERE v.fecha BETWEEN ? AND ?
+                        ORDER BY v.id DESC
+                    """, (d1, d2))
+                rows = cur.fetchall()
+                con.close()
+
+                total_gs = 0
+                for vid, fecha, vend, mod, tot in rows:
+                    total_gs += float(tot or 0)
+                    tv_ventas.insert("", tk.END, values=(vid, fecha, vend, mod, f"{int(tot):,}".replace(",", ".")))
+                lbl_total.config(text=f"Mostrando {len(rows)} ventas | Total: {int(total_gs):,} Gs".replace(",", "."))
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudieron cargar ventas: {e}")
+
+        def cargar_detalle(event=None):
+            # limpiar detalle
+            for it in tv_items.get_children():
+                tv_items.delete(it)
+            for it in tv_pagos.get_children():
+                tv_pagos.delete(it)
+
+            sel = tv_ventas.selection()
+            if not sel:
+                return
+            venta_id = tv_ventas.item(sel[0])["values"][0]
+            try:
+                con = sqlite3.connect(db_path)
+                cur = con.cursor()
+
+                # Ítems
+                cur.execute("""
+                    SELECT descripcion, IFNULL(peso_gramos,0), IFNULL(precio_por_gramo,0),
+                           IFNULL(cantidad,1), subtotal, tipo
+                    FROM venta_items
+                    WHERE venta_id = ?
+                    ORDER BY id ASC
+                """, (venta_id,))
+                for (desc, peso, pgr, cant, subt, tipo) in cur.fetchall():
+                    tv_items.insert(
+                        "", tk.END,
+                        values=(
+                            desc or "",
+                            f"{float(peso):.2f}",
+                            f"{int(pgr):,}".replace(",", "."),
+                            int(cant),
+                            f"{int(subt):,}".replace(",", "."),
+                            tipo or "",
+                        )
+                    )
+
+                # Pagos
+                cur.execute("""
+                    SELECT metodo, monto FROM pagos
+                    WHERE venta_id = ?
+                    ORDER BY id ASC
+                """, (venta_id,))
+                for (met, mon) in cur.fetchall():
+                    tv_pagos.insert("", tk.END, values=(met, f"{int(mon):,}".replace(",", ".")))
+
+                con.close()
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo cargar el detalle de la venta #{venta_id}: {e}")
+
+        tv_ventas.bind("<<TreeviewSelect>>", cargar_detalle)
+
+        # Carga inicial
+        cargar_ventas()
