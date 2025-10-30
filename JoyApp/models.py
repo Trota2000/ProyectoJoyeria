@@ -41,15 +41,31 @@ def crear_venta(
 ) -> int:
     """
     Crea venta + items + pagos en una transacción.
-    fecha se guarda con datetime('now') (hora del sistema).
-    Retorna venta_id.
+    Además:
+      - Verifica stock para ítems tipo 'MATERIAL'.
+      - Descuenta stock_gramos = stock_gramos - peso_gramos.
+    Lanza ValueError si no hay stock suficiente.
     """
     total = sum(float(i["subtotal"]) for i in items)
 
     with get_conn() as con:
         cur = con.cursor()
 
-        # Venta
+        # Verificar stock suficiente
+        for it in items:
+            if (it.get("tipo") == "MATERIAL") and it.get("material_id") and it.get("peso_gramos") is not None:
+                mat_id = int(it["material_id"])
+                peso = float(it["peso_gramos"])
+                row = cur.execute("SELECT stock_gramos FROM materiales WHERE id=?", (mat_id,)).fetchone()
+                if not row:
+                    raise ValueError(f"Material #{mat_id} no encontrado.")
+                stock_actual = float(row[0] or 0)
+                if stock_actual < peso:
+                    raise ValueError(
+                        f"Stock insuficiente para material #{mat_id}. Disponible: {stock_actual} g, requerido: {peso} g."
+                    )
+
+        # Insertar venta
         cur.execute(
             "INSERT INTO ventas (fecha, usuario_id, modalidad, caja_sesion_id, total) "
             "VALUES (datetime('now'), ?, ?, ?, ?)",
@@ -57,7 +73,7 @@ def crear_venta(
         )
         venta_id = int(cur.lastrowid)
 
-        # Ítems
+        # Insertar ítems
         for it in items:
             cur.execute(
                 "INSERT INTO venta_items "
@@ -75,7 +91,15 @@ def crear_venta(
                 ),
             )
 
-        # Pagos
+        # Descontar stock
+        for it in items:
+            if (it.get("tipo") == "MATERIAL") and it.get("material_id") and it.get("peso_gramos") is not None:
+                cur.execute(
+                    "UPDATE materiales SET stock_gramos = stock_gramos - ? WHERE id=?",
+                    (float(it["peso_gramos"]), int(it["material_id"]))
+                )
+
+        # Insertar pagos
         for p in pagos:
             cur.execute(
                 "INSERT INTO pagos (venta_id, metodo, monto) VALUES (?,?,?)",

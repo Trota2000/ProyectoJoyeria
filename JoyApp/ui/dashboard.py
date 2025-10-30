@@ -17,8 +17,10 @@ class Dashboard(tk.Frame):
         tk.Button(self, text="Nueva venta", command=self.open_nueva_venta).pack(fill="x", padx=12, pady=6)
         tk.Button(self, text="Gestión de Materiales", command=self.open_gestion_materiales).pack(fill="x", padx=12, pady=6)
         tk.Button(self, text="Historial de Ventas", command=self.open_historial_ventas).pack(fill="x", padx=12, pady=6)
+        tk.Button(self, text="Cierre de Caja", command=self.open_cierre_caja).pack(fill="x", padx=12, pady=6)
 
     # ---- Ventana de Nueva Venta ----
+      # ---- Ventana de Nueva Venta ----
     def open_nueva_venta(self):
         """
         Abre la ventana de Nueva Venta y actualiza el listado de materiales antes de mostrarla.
@@ -42,8 +44,14 @@ class Dashboard(tk.Frame):
             venta_ui.materiales = materiales_actualizados
             venta_ui.cbo_mat["values"] = [f"{m[1]} {m[2] or ''}".strip() for m in materiales_actualizados]
 
-        # Mensaje visual opcional
-        messagebox.showinfo("Actualizado", f"Se cargaron {len(materiales_actualizados)} materiales disponibles.")
+        # 🔇 Mantengo tu línea intacta pero anulo temporalmente el popup
+        _orig_showinfo = messagebox.showinfo
+        try:
+            messagebox.showinfo = lambda *a, **k: None  # desactiva el cuadro solo aquí
+            # Mensaje visual opcional (línea original, NO modificada)
+            messagebox.showinfo("Actualizado", f"Se cargaron {len(materiales_actualizados)} materiales disponibles.")
+        finally:
+            messagebox.showinfo = _orig_showinfo  # restaurar para el resto de la app
 
     # ---- Gestión de materiales ----
     def open_gestion_materiales(self):
@@ -55,6 +63,20 @@ class Dashboard(tk.Frame):
         # Ruta absoluta a la base de datos
         db_path = os.path.join(os.path.dirname(__file__), "..", "data.db")
         db_path = os.path.abspath(db_path)
+
+        # >>> ADDED: Migración suave para columna de stock
+        try:
+            conn_mig = sqlite3.connect(db_path)
+            c_mig = conn_mig.cursor()
+            cols = [r[1] for r in c_mig.execute("PRAGMA table_info(materiales)")]
+            if "stock_gramos" not in cols:
+                c_mig.execute("ALTER TABLE materiales ADD COLUMN stock_gramos REAL NOT NULL DEFAULT 0")
+                conn_mig.commit()
+            conn_mig.close()
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo preparar la columna de stock: {e}")
+            return
+        # <<< ADDED
 
         # --- FORMULARIO ---
         frame_form = tk.LabelFrame(ventana, text="Formulario de Material", padx=10, pady=10)
@@ -83,6 +105,12 @@ class Dashboard(tk.Frame):
         activo_var = tk.BooleanVar(value=True)
         tk.Checkbutton(frame_form, text="Activo", variable=activo_var).grid(row=2, column=1, sticky="w")
 
+        # >>> ADDED: campo Stock (g) sin quitar nada
+        tk.Label(frame_form, text="Stock (g):").grid(row=2, column=0, sticky="w")
+        entry_stock = tk.Entry(frame_form, width=10)
+        entry_stock.grid(row=2, column=1, padx=80, pady=4, sticky="w")
+        # <<< ADDED
+
         modo_edicion = tk.BooleanVar(value=False)
         id_edicion = tk.StringVar(value="")
 
@@ -96,6 +124,12 @@ class Dashboard(tk.Frame):
             mayor = entry_precio_mayor.get().strip()
             menor = entry_precio_menor.get().strip()
             activo = 1 if activo_var.get() else 0
+
+            # >>> ADDED: leer stock
+            stock = entry_stock.get().strip()
+            if stock == "":
+                stock = "0"
+            # <<< ADDED
 
             if not nombre or not mayor or not menor:
                 messagebox.showwarning("Atención", "Completa todos los campos obligatorios (nombre y precios).")
@@ -112,22 +146,23 @@ class Dashboard(tk.Frame):
                         tipo TEXT,
                         precio_gramo_mayor REAL NOT NULL,
                         precio_gramo_menor REAL NOT NULL,
-                        activo INTEGER DEFAULT 1
+                        activo INTEGER DEFAULT 1,
+                        stock_gramos REAL NOT NULL DEFAULT 0
                     )
                 """)
 
                 if modo_edicion.get():
                     c.execute("""
                         UPDATE materiales
-                        SET nombre=?, ley=?, tipo=?, precio_gramo_mayor=?, precio_gramo_menor=?, activo=?
+                        SET nombre=?, ley=?, tipo=?, precio_gramo_mayor=?, precio_gramo_menor=?, activo=?, stock_gramos=?
                         WHERE id=?
-                    """, (nombre, ley, tipo, float(mayor), float(menor), activo, id_edicion.get()))
+                    """, (nombre, ley, tipo, float(mayor), float(menor), activo, float(stock), id_edicion.get()))
                     messagebox.showinfo("Éxito", "✅ Material actualizado correctamente.")
                 else:
                     c.execute("""
-                        INSERT INTO materiales (nombre, ley, tipo, precio_gramo_mayor, precio_gramo_menor, activo)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (nombre, ley, tipo, float(mayor), float(menor), activo))
+                        INSERT INTO materiales (nombre, ley, tipo, precio_gramo_mayor, precio_gramo_menor, activo, stock_gramos)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (nombre, ley, tipo, float(mayor), float(menor), activo, float(stock)))
                     messagebox.showinfo("Éxito", "✅ Material agregado correctamente.")
 
                 conn.commit()
@@ -144,6 +179,9 @@ class Dashboard(tk.Frame):
             entry_precio_mayor.delete(0, tk.END)
             entry_precio_menor.delete(0, tk.END)
             activo_var.set(True)
+            # >>> ADDED: limpiar stock
+            entry_stock.delete(0, tk.END)
+            # <<< ADDED
             modo_edicion.set(False)
             id_edicion.set("")
             btn_guardar.config(text="Guardar")
@@ -175,14 +213,14 @@ class Dashboard(tk.Frame):
             c = conn.cursor()
             if filtro:
                 c.execute("""
-                    SELECT id, nombre, ley, tipo, precio_gramo_mayor, precio_gramo_menor, activo
+                    SELECT id, nombre, ley, tipo, precio_gramo_mayor, precio_gramo_menor, stock_gramos, activo
                     FROM materiales
                     WHERE LOWER(nombre) LIKE ? OR LOWER(tipo) LIKE ? OR LOWER(ley) LIKE ?
                     ORDER BY id DESC
                 """, (f"%{filtro}%", f"%{filtro}%", f"%{filtro}%"))
             else:
                 c.execute("""
-                    SELECT id, nombre, ley, tipo, precio_gramo_mayor, precio_gramo_menor, activo
+                    SELECT id, nombre, ley, tipo, precio_gramo_mayor, precio_gramo_menor, stock_gramos, activo
                     FROM materiales
                     ORDER BY id DESC
                 """)
@@ -213,7 +251,9 @@ class Dashboard(tk.Frame):
                 messagebox.showwarning("Atención", "Selecciona un material para editar.")
                 return
             item = tabla.item(seleccion[0])
-            mat_id, nombre, ley, tipo, mayor, menor, activo = item["values"]
+            # >>> ADDED: incluye stock en el unpack
+            mat_id, nombre, ley, tipo, mayor, menor, stock_tabla, activo = item["values"]
+            # <<< ADDED
             entry_nombre.delete(0, tk.END)
             entry_ley.delete(0, tk.END)
             entry_tipo.delete(0, tk.END)
@@ -225,6 +265,10 @@ class Dashboard(tk.Frame):
             entry_precio_mayor.insert(0, mayor)
             entry_precio_menor.insert(0, menor)
             activo_var.set(bool(activo))
+            # >>> ADDED: precargar stock desde tabla
+            entry_stock.delete(0, tk.END)
+            entry_stock.insert(0, stock_tabla)
+            # <<< ADDED
             modo_edicion.set(True)
             id_edicion.set(mat_id)
             btn_guardar.config(text="Actualizar")
@@ -257,7 +301,9 @@ class Dashboard(tk.Frame):
         frame_lista = tk.LabelFrame(ventana, text="Materiales registrados", padx=10, pady=10)
         frame_lista.pack(fill="both", expand=True, padx=10, pady=10)
 
-        columnas = ("id", "nombre", "ley", "tipo", "mayor", "menor", "activo")
+        # >>> ADDED: agregamos columna "stock"
+        columnas = ("id", "nombre", "ley", "tipo", "mayor", "menor", "stock", "activo")
+        # <<< ADDED
         tabla = ttk.Treeview(frame_lista, columns=columnas, show="headings", height=12)
         tabla.pack(fill="both", expand=True)
 
@@ -268,6 +314,9 @@ class Dashboard(tk.Frame):
             ("tipo", "Tipo", 120, "center"),
             ("mayor", "Precio Mayor", 100, "e"),
             ("menor", "Precio Menor", 100, "e"),
+            # >>> ADDED: header de stock
+            ("stock", "Stock (g)", 100, "e"),
+            # <<< ADDED
             ("activo", "Activo", 60, "center")
         ]:
             tabla.heading(col, text=text)
@@ -281,7 +330,7 @@ class Dashboard(tk.Frame):
                 conn = sqlite3.connect(db_path)
                 c = conn.cursor()
                 c.execute("""
-                    SELECT id, nombre, ley, tipo, precio_gramo_mayor, precio_gramo_menor, activo
+                    SELECT id, nombre, ley, tipo, precio_gramo_mayor, precio_gramo_menor, stock_gramos, activo
                     FROM materiales
                     ORDER BY id DESC
                 """)
@@ -595,3 +644,88 @@ class Dashboard(tk.Frame):
 
         # Carga inicial
         cargar_ventas()
+        # >>> ADDED: Cierre de Caja
+    def open_cierre_caja(self):
+        import datetime as dt
+
+        win = tk.Toplevel(self.master)
+        win.title("Cierre de Caja")
+        win.geometry("520x420")
+        win.resizable(False, False)
+
+        # Ruta a la BD
+        db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data.db"))
+
+        # Cabecera
+        hoy_str = dt.date.today().isoformat()
+        tk.Label(win, text=f"Cierre de Caja - {hoy_str}", font=("TkDefaultFont", 11, "bold")).pack(pady=(10, 6))
+
+        # Contenedores
+        frm_totales = tk.LabelFrame(win, text="Totales del día", padx=10, pady=10)
+        frm_totales.pack(fill="x", padx=10, pady=(0, 8))
+
+        frm_metodos = tk.LabelFrame(win, text="Desglose por método de pago", padx=10, pady=10)
+        frm_metodos.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+
+        # Labels de totales
+        lbl_cant = tk.Label(frm_totales, text="Ventas: 0")
+        lbl_cant.grid(row=0, column=0, sticky="w", padx=4, pady=2)
+
+        lbl_total = tk.Label(frm_totales, text="Total del día: 0 Gs", font=("TkDefaultFont", 10, "bold"))
+        lbl_total.grid(row=0, column=1, sticky="e", padx=4, pady=2)
+
+        # Tabla por método
+        tv = ttk.Treeview(frm_metodos, columns=("metodo", "monto"), show="headings", height=8)
+        tv.heading("metodo", text="Método")
+        tv.heading("monto", text="Monto (Gs)")
+        tv.column("metodo", width=180, anchor="center")
+        tv.column("monto", width=160, anchor="e")
+        tv.pack(fill="both", expand=True)
+
+        def cargar_cierre():
+            # limpiar
+            for it in tv.get_children():
+                tv.delete(it)
+
+            try:
+                con = sqlite3.connect(db_path)
+                cur = con.cursor()
+
+                # Ventas del día (fecha LIKE 'YYYY-MM-DD%')
+                cur.execute("""
+                    SELECT COUNT(*), COALESCE(SUM(total), 0)
+                    FROM ventas
+                    WHERE fecha LIKE ?
+                """, (hoy_str + "%",))
+                cant, total = cur.fetchone() or (0, 0)
+
+                # Desglose por método
+                cur.execute("""
+                    SELECT p.metodo, COALESCE(SUM(p.monto), 0) AS monto
+                    FROM pagos p
+                    WHERE p.venta_id IN (
+                        SELECT id FROM ventas WHERE fecha LIKE ?
+                    )
+                    GROUP BY p.metodo
+                    ORDER BY monto DESC
+                """, (hoy_str + "%",))
+                desglose = cur.fetchall()
+                con.close()
+
+                # Totales
+                lbl_cant.config(text=f"Ventas: {cant}")
+                lbl_total.config(text=f"Total del día: {int(total):,} Gs".replace(",", "."))
+
+                # Métodos
+                for metodo, monto in desglose:
+                    tv.insert("", tk.END, values=(metodo, f"{int(monto):,}".replace(",", ".")))
+
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo calcular el cierre: {e}")
+
+        tk.Button(win, text="Actualizar", command=cargar_cierre).pack(pady=(0, 10))
+
+        # Carga inicial
+        cargar_cierre()
+    # <<< ADDED
+
