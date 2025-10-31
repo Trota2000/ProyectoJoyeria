@@ -1,8 +1,16 @@
 import tkinter as tk
 from tkinter import messagebox, ttk
+from ..ui_theme import aplicar_tema_base, fondo_degradado, crear_logo, boton_estilo
 import sqlite3
 import os
 from .nueva_venta import NuevaVenta
+from ..themes.goldwine import (
+    aplicar_tema_base,
+    crear_logo,
+    fondo_degradado,
+    boton_estilo,
+    estilizar_toplevel,
+)
 
 
 class Dashboard(tk.Frame):
@@ -10,16 +18,32 @@ class Dashboard(tk.Frame):
         super().__init__(master)
         self.user = user
 
+        # 1) Tema y estética (deben ir DENTRO del __init__, no al nivel de clase)
+        self.colors = aplicar_tema_base(self.winfo_toplevel())
+        fondo_degradado(self.winfo_toplevel())
+        crear_logo(self)
+
+        # 2) Contenedor principal
         self.pack(fill="both", expand=True)
 
-        tk.Label(self, text=f"Bienvenido, {user['rol']}").pack(padx=12, pady=12)
+        # 3) Estilo de botones (variable local que se usa al crear botones)
+        btn_style = boton_estilo()
 
-        tk.Button(self, text="Nueva venta", command=self.open_nueva_venta).pack(fill="x", padx=12, pady=6)
-        tk.Button(self, text="Gestión de Materiales", command=self.open_gestion_materiales).pack(fill="x", padx=12, pady=6)
-        tk.Button(self, text="Historial de Ventas", command=self.open_historial_ventas).pack(fill="x", padx=12, pady=6)
-        tk.Button(self, text="Cierre de Caja", command=self.open_cierre_caja).pack(fill="x", padx=12, pady=6)
+        # 4) Encabezado
+        tk.Label(
+            self,
+            text=f"Bienvenido, {user['rol']}",
+            bg=self.colors.get("bg", None),
+            fg=self.colors.get("fg", None),
+            font=("Segoe UI", 12, "bold")
+        ).pack(padx=12, pady=12)
 
-    # ---- Ventana de Nueva Venta ----
+        # 5) Botones principales (sin cambiar callbacks)
+        tk.Button(self, text="Nueva venta",            command=self.open_nueva_venta,        **btn_style).pack(fill="x", padx=12, pady=6)
+        tk.Button(self, text="Gestión de Materiales",  command=self.open_gestion_materiales, **btn_style).pack(fill="x", padx=12, pady=6)
+        tk.Button(self, text="Historial de Ventas",    command=self.open_historial_ventas,   **btn_style).pack(fill="x", padx=12, pady=6)
+        tk.Button(self, text="Cierre de Caja",         command=self.open_cierre_caja,        **btn_style).pack(fill="x", padx=12, pady=6)
+
       # ---- Ventana de Nueva Venta ----
     def open_nueva_venta(self):
         """
@@ -28,6 +52,7 @@ class Dashboard(tk.Frame):
         """
         win = tk.Toplevel(self.master)
         win.title("Nueva venta")
+        estilizar_toplevel(win)
 
         try:
             from ..models import listar_materiales_activos
@@ -57,8 +82,10 @@ class Dashboard(tk.Frame):
     def open_gestion_materiales(self):
         ventana = tk.Toplevel(self.master)
         ventana.title("Gestión de Materiales")
+        estilizar_toplevel(ventana)
         ventana.geometry("850x550")
         ventana.resizable(False, False)
+        
 
         # Ruta absoluta a la base de datos
         db_path = os.path.join(os.path.dirname(__file__), "..", "data.db")
@@ -349,6 +376,7 @@ class Dashboard(tk.Frame):
 
         ventana = tk.Toplevel(self.master)
         ventana.title("Historial de Ventas")
+        estilizar_toplevel(ventana)
         ventana.geometry("950x600")
         ventana.resizable(False, False)
 
@@ -650,6 +678,7 @@ class Dashboard(tk.Frame):
 
         win = tk.Toplevel(self.master)
         win.title("Cierre de Caja")
+        estilizar_toplevel(win)
         win.geometry("520x420")
         win.resizable(False, False)
 
